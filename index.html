@@ -1,12 +1,38 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document</title>
+
+    <style>
+        .links{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100dvh;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        a{
+            text-transform: uppercase;
+            text-decoration: none;
+            color: black    ;
+        }
+
+        a:hover{
+            color: blue;
+        }
+    </style>
 </head>
+
 <body>
-    <a src="left.html" target="_blank">leaflet</a>
-    <a src="yandex.html" target="_blank">yandex</a>
+    <div class="links">
+        <a href="leaf.html" target="_blank">leaflet</a>
+        <a href="yandex.html" target="_blank">yandex</a>
+    </div>
 </body>
+
 </html>

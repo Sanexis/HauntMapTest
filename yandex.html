@@ -9,9 +9,9 @@
     html, body { height:100%; margin:0; }
     #map { width:100%; height:100%; }
     .panel {
-      position:absolute; top:12px; left:12px; z-index:1000;
+      position:absolute; top:12px; left:12px; z-index:1000; width: 400px;
       background:#fff; border-radius:8px; padding:12px; box-shadow:0 2px 10px rgba(0,0,0,.2);
-      min-width:260px; user-select:none;
+      min-width:280px; user-select:none;
     }
     .row { display:flex; gap:8px; }
     .type { flex:1; padding:8px 10px; border:2px solid transparent; border-radius:6px; text-align:center; cursor:pointer; font-weight:600; }
@@ -24,14 +24,17 @@
     .btn-danger { background:#f44336; }
     .btn-secondary { background:#607D8B; }
     .hint { margin-top:8px; font-size:12px; color:#666; min-height:1.2em;}
+    .totals { margin-top:10px; font-size:13px; line-height:1.4; }
+    .totals div { display:flex; justify-content:space-between; }
+    .totals .sum { font-weight:700; border-top:1px solid #eee; padding-top:6px; margin-top:6px; }
   </style>
 </head>
 <body>
   <div class="panel">
     <div class="row">
-      <div class="type bear active" data-type="bear">🐻 Медвежья</div>
-      <div class="type wolf" data-type="wolf">🐺 Волчья</div>
-      <div class="type fox"  data-type="fox">🦊 Лисья</div>
+      <div class="type bear active" data-type="bear">🐻 Медведь</div>
+      <div class="type wolf" data-type="wolf">🐺 Волк</div>
+      <div class="type fox"  data-type="fox">🦊 Лисица</div>
     </div>
 
     <button id="start"  class="btn">Начать рисование</button>
@@ -45,15 +48,25 @@
     <button id="clear"  class="btn btn-danger">Очистить всё</button>
 
     <div id="status" class="hint"></div>
+
+    <div class="totals" id="totals">
+      <div><span>🐻 Медведь</span><span id="sum-bear">0 м²</span></div>
+      <div><span>🐺 Волк</span><span id="sum-wolf">0 м²</span></div>
+      <div><span>🦊 Лисица</span><span id="sum-fox">0 м²</span></div>
+      <div class="sum"><span>Итого</span><span id="sum-all">0 м²</span></div>
+    </div>
   </div>
 
   <div id="map"></div>
 
   <script>
+    // --- состояние ---
     let map, finals, temps;
     let drawing = false, editMode = false, selectedPoly = null;
-
     let points = [], vertexMarks = [], tempPolygon = null, currentType = 'bear';
+    let nextId = 1; // локальный инкремент id для полигонов
+
+    const LS_KEY = 'animal_zones_v1';
 
     const styles = {
       bear: { name:'Медвежья зона', emoji:'🐻', fill:'#8B4513', stroke:'#654321' },
@@ -68,6 +81,7 @@
       map.geoObjects.add(finals);
       map.geoObjects.add(temps);
 
+      // Выбор типа
       document.querySelectorAll('.type').forEach(el => {
         el.addEventListener('click', () => {
           if (drawing || editMode) return;
@@ -77,6 +91,7 @@
         });
       });
 
+      // Кнопки
       byId('start').addEventListener('click', startDrawing);
       byId('finish').addEventListener('click', finishDrawing);
       byId('cancel').addEventListener('click', cancelDrawing);
@@ -88,9 +103,10 @@
       byId('clear').addEventListener('click', clearAll);
 
       setStatus('Готово.');
+      restoreFromLocalStorage(); // восстановить сохранённые зоны
     });
 
-    // ---- рисование ----
+    // -------- РИСОВАНИЕ --------
     function startDrawing() {
       if (drawing || editMode) return;
       drawing = true;
@@ -101,7 +117,6 @@
       toggleDrawUI(true);
       setStatus('Рисование: кликайте по карте (≥3 точки).');
 
-      // центральное: клики по полигонам не перехватываются, т.к. они прозрачные (см. buildFinal)
       map.behaviors.disable(['drag','scrollZoom']);
       map.events.add('click', onMapClick);
     }
@@ -118,7 +133,7 @@
       const mark = new ymaps.Placemark(coords, {}, {
         preset:'islands#blueCircleIcon',
         draggable:true,
-        interactivityModel: 'default#transparent' // тоже не блокирует клики
+        interactivityModel:'default#transparent'
       });
 
       mark.events.add('drag', () => {
@@ -143,7 +158,7 @@
           strokeColor: s.stroke,
           strokeWidth: 2,
           fillOpacity: 0.3,
-          interactivityModel: 'default#transparent'
+          interactivityModel:'default#transparent'
         });
         temps.add(tempPolygon);
       }
@@ -152,10 +167,11 @@
     function finishDrawing() {
       if (!drawing) return;
       if (points.length < 3) { setStatus('Нужно минимум 3 точки.'); return; }
-      const poly = buildFinal(points.slice(), currentType);
+      const poly = buildFinal(points.slice(), currentType, undefined); // id сгенерится
       finals.add(poly);
       stopDrawing();
       setStatus('Многоугольник создан.');
+      persistToLocalStorage(); // сохранить после создания
     }
 
     function cancelDrawing() {
@@ -176,21 +192,25 @@
       map.events.remove('click', onMapClick);
     }
 
-    function buildFinal(coords, type) {
+    // -------- СОЗДАНИЕ ГОТОВОГО ПОЛИГОНА + ЭМОДЗИ --------
+    function buildFinal(coords, type, forcedId) {
       const s = styles[type];
+      const id = forcedId ?? nextId++;
 
       const poly = new ymaps.Polygon([coords], {
         hintContent: `${s.emoji} ${s.name}`,
-        balloonContent: `<strong>${s.name}</strong><br>${s.emoji}<br>Вершин: ${coords.length}`
+        balloonContent: `<strong>${s.name}</strong><br>${s.emoji}<br>Вершин: ${coords.length}`,
+        zoneType: type,
+        zoneId: id
       }, {
         fillColor: s.fill,
         strokeColor: s.stroke,
         strokeWidth: 3,
         fillOpacity: 0.5,
-        // ключ: при обычной работе готовые зоны «прозрачны» для кликов
-        interactivityModel: 'default#transparent'
+        interactivityModel:'default#transparent'
       });
 
+      // эмодзи в центре
       const center = centroid(coords);
       const emoji = new ymaps.Placemark(center, { iconContent: s.emoji }, {
         iconLayout:'default#imageWithContent',
@@ -200,38 +220,44 @@
         iconContentLayout: ymaps.templateLayoutFactory.createClass(
           '<div style="font-size:24px;width:40px;height:40px;line-height:40px;text-align:center;">{{ properties.iconContent }}</div>'
         ),
-        interactivityModel: 'default#transparent'
+        interactivityModel:'default#transparent'
       });
 
-      // синхронизация эмодзи при изменении геометрии
+      // синхронизация центра и площади при изменении геометрии
       poly.events.add('geometrychange', () => {
         const all = poly.geometry.getCoordinates();
-        const c = centroid(all[0]);
-        emoji.geometry.setCoordinates(c);
+        const ring = all[0];
+        emoji.geometry.setCoordinates(centroid(ring));
+        // пересчёт площади + сохранение
+        const area = areaMeters2(ring);
+        poly.properties.set('area_m2', area);
+        persistToLocalStorage();
+        updateTotalsUI(); // быстрая индикация
       });
 
-      finals.add(emoji);
-      poly.properties.set('emoji', emoji);
-
-      // клики по полигону обрабатываем только в режиме редактирования
+      // кликабельность для режима редактирования
       poly.events.add('click', (e) => {
         if (!editMode) return;
         e.stopPropagation();
         selectPolygon(poly);
       });
 
+      // начальная площадь
+      const area = areaMeters2(coords);
+      poly.properties.set('area_m2', area);
+
+      finals.add(emoji);
+      poly.properties.set('emoji', emoji);
+
       return poly;
     }
 
-    // ---- редактирование ----
+    // -------- РЕДАКТИРОВАНИЕ --------
     function enableEditMode() {
       if (drawing || editMode) return;
       editMode = true;
       setStatus('Редактирование: кликните по многоугольнику, двигайте вершины.');
-
-      // делаем полигоны «непрозрачными» для кликов, чтобы их можно было выбрать
-      setPolysInteractivity('default#geoObject');
-
+      setPolysInteractivity('default#geoObject'); // разрешаем клики по полигонам
       byId('editMode').disabled = true;
       byId('editDone').disabled = false;
       updateDeleteBtn();
@@ -245,18 +271,17 @@
         selectedPoly = null;
       }
       editMode = false;
-      // возвращаем прозрачность для кликов по карте
-      setPolysInteractivity('default#transparent');
-
+      setPolysInteractivity('default#transparent'); // снова делаем их «прозрачными»
       byId('editMode').disabled = false;
       byId('editDone').disabled = true;
       updateDeleteBtn();
       setStatus('Редактирование завершено.');
+      persistToLocalStorage(); // после правок — сохранить
+      updateTotalsUI();
     }
 
     function selectPolygon(poly) {
       if (selectedPoly === poly) return;
-
       if (selectedPoly) {
         selectedPoly.editor && selectedPoly.editor.stopEditing();
         setStroke(selectedPoly, false);
@@ -275,33 +300,109 @@
       selectedPoly = null;
       updateDeleteBtn();
       setStatus('Многоугольник удалён.');
+      persistToLocalStorage(); // сохранить новое состояние
+      updateTotalsUI();
     }
 
     function setStroke(poly, on) {
-      poly.options.set({
-        strokeWidth: on ? 4 : 3,
-        strokeStyle: on ? 'dash' : 'solid'
-      });
+      poly.options.set({ strokeWidth: on ? 4 : 3, strokeStyle: on ? 'dash' : 'solid' });
     }
 
     function setPolysInteractivity(model) {
       finals.each(obj => {
-        if (obj && obj.geometry && obj.geometry.getType && obj.geometry.getType() === 'Polygon') {
+        if (obj?.geometry?.getType?.() === 'Polygon') {
           obj.options.set('interactivityModel', model);
         }
-        // эмодзи тоже не должны перехватывать клики
-        if (obj && obj.geometry && obj.geometry.getType && obj.geometry.getType() === 'Point') {
-          obj.options.set('interactivityModel', model === 'default#geoObject' ? 'default#transparent' : 'default#transparent');
+        if (obj?.geometry?.getType?.() === 'Point') {
+          obj.options.set('interactivityModel', 'default#transparent');
         }
       });
     }
 
-    // ---- утилиты ----
+    // -------- LOCALSTORAGE --------
+    function persistToLocalStorage() {
+      const zones = [];
+      let maxId = nextId - 1;
+
+      finals.each(obj => {
+        if (obj?.geometry?.getType?.() !== 'Polygon') return;
+        const id = obj.properties.get('zoneId');
+        const type = obj.properties.get('zoneType');
+        const coords = obj.geometry.getCoordinates()[0]; // внешнее кольцо
+        const area = obj.properties.get('area_m2') ?? areaMeters2(coords);
+
+        zones.push({ id, type, coords, area });
+        if (typeof id === 'number' && id > maxId) maxId = id;
+      });
+
+      nextId = maxId + 1;
+
+      const sums = zones.reduce((acc, z) => {
+        acc[z.type] = (acc[z.type] || 0) + z.area;
+        acc.all += z.area;
+        return acc;
+      }, { bear:0, wolf:0, fox:0, all:0 });
+
+      const payload = { zones, sums, updatedAt: new Date().toISOString() };
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(payload));
+      } catch(e) {
+        // молча игнорируем переполнение
+      }
+    }
+
+    function restoreFromLocalStorage() {
+      let data = null;
+      try {
+        data = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+      } catch(e) { data = null; }
+
+      if (!data?.zones?.length) {
+        updateTotalsUI(); // нули
+        return;
+      }
+
+      // Воссоздаём полигоны
+      for (const z of data.zones) {
+        const poly = buildFinal(z.coords, z.type, z.id);
+        // сохранить площадь из сохранённого значения (чтобы не «скакала» от округлений)
+        poly.properties.set('area_m2', z.area);
+        finals.add(poly);
+        if (z.id >= nextId) nextId = z.id + 1;
+      }
+
+      updateTotalsUI(data.sums);
+    }
+
+    // -------- ВСПОМОГАТЕЛЬНЫЕ --------
+    // геометрический центр по среднему (для эмодзи)
     function centroid(coords) {
       let lat = 0, lon = 0;
       for (let i = 0; i < coords.length; i++) { lat += coords[i][0]; lon += coords[i][1]; }
       return [lat/coords.length, lon/coords.length];
     }
+
+    // Площадь полигона в м²: проецируем в Web Mercator и применяем «шнуровку»
+    // coords: [[lat, lon], ...]
+    function areaMeters2(coords) {
+      if (!coords || coords.length < 3) return 0;
+      const pts = coords.map(ll => mercatorMeters(ll[0], ll[1]));
+      let sum = 0;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        sum += (pts[j].x * pts[i].y - pts[i].x * pts[j].y);
+      }
+      return Math.abs(sum / 2);
+    }
+
+    // Spherical Mercator (EPSG:3857) — грубо, но для визуальных зон достаточно
+    function mercatorMeters(lat, lon) {
+      const R = 6378137.0;
+      const x = R * (lon * Math.PI / 180);
+      const y = R * Math.log(Math.tan(Math.PI/4 + (lat * Math.PI / 180)/2));
+      return { x, y };
+    }
+
+    // UI helpers
     function toggleDrawUI(inDrawing) {
       byId('start').disabled  = inDrawing;
       byId('finish').disabled = !inDrawing;
@@ -316,12 +417,39 @@
       selectedPoly = null;
       updateDeleteBtn();
       setStatus('Карта очищена.');
+      persistToLocalStorage();
+      updateTotalsUI();
     }
     function updateDeleteBtn() {
       byId('deleteSel').disabled = !(editMode && selectedPoly);
     }
     function byId(id){ return document.getElementById(id); }
     function setStatus(t){ byId('status').textContent = t; }
+
+    function fmtArea(m2) {
+      if (m2 >= 1_000_000) return (m2/1_000_000).toFixed(2) + ' км²';
+      if (m2 >= 10_000)    return Math.round(m2).toLocaleString('ru-RU') + ' м²';
+      return m2.toFixed(2) + ' м²';
+    }
+
+    function updateTotalsUI(sumsOpt) {
+      let sums = sumsOpt;
+      if (!sums) {
+        // если не передали — собрать заново
+        sums = { bear:0, wolf:0, fox:0, all:0 };
+        finals.each(obj => {
+          if (obj?.geometry?.getType?.() !== 'Polygon') return;
+          const type = obj.properties.get('zoneType');
+          const area = obj.properties.get('area_m2') || 0;
+          sums[type] = (sums[type] || 0) + area;
+          sums.all += area;
+        });
+      }
+      byId('sum-bear').textContent = fmtArea(sums.bear || 0);
+      byId('sum-wolf').textContent = fmtArea(sums.wolf || 0);
+      byId('sum-fox').textContent  = fmtArea(sums.fox  || 0);
+      byId('sum-all').textContent  = fmtArea(sums.all  || 0);
+    }
   </script>
 </body>
 </html>
